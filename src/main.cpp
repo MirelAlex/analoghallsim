@@ -33,31 +33,42 @@ Sensor sensor = {
 #define PARAM_MIN_HYST_THRESHOLD 300u
 #define PARAM_MAX_HYST_THRESHOLD 400u
 #define PARAM_OPEN_LOAD_TH 600u
-#define PARAM_DEBOUNCE_THRESHOLD 100u
+#define PARAM_DEBOUNCE_THRESHOLD 10u // [ms]
+#define PARAM_SHORT_TO_GND_TH 100u
 
 uint32 previousMillis = 0u;
-const uint8 task10ms = 10u;
+const uint8 taskTime = 1u; // [ms]
 // function prototypes
+void hallInit();
 void readInput(void);
 void filterInput(void);
 void graph(void);
 void taskA();
 boolean calculateState();
 boolean isOpenLoad();
+boolean isShortToGround();
 boolean debounceState();
 
 void setup()
 {
   // Initialize Serial communication
   Serial.begin(115200);
-
-  self.debounceCounter = 0u;
-  self.debounceStarted = false;
+  // Init
+  hallInit();
 }
 
 void loop()
 {
   taskA();
+}
+
+void hallInit()
+{
+  readInput();
+  IN.filteredLsb = IN.lsb;
+  self.debounceCounter = 0u;
+  self.debounceStarted = false;
+  // delay(5000);
 }
 
 void readInput()
@@ -75,8 +86,8 @@ void filterInput()
 void graph()
 {
   Serial.print(IN.lsb);
-  // Serial.print(",");
-  // Serial.print(IN.filteredLsb);
+  Serial.print(",");
+  Serial.print(IN.filteredLsb);
   Serial.print(",");
   Serial.print(self.debounceCounter);
   Serial.print(",");
@@ -91,6 +102,7 @@ boolean calculateState()
   state &= ~(HALL_EXT_ERR);
   state |= HALL_READY;
 
+  boolean wasReady = (boolean)(STATE & HALL_READY);
   boolean wasActive = (boolean)(state & HALL_ACTIVE);
 
   if (wasActive && IN.lsb < PARAM_MIN_HYST_THRESHOLD)
@@ -114,9 +126,14 @@ boolean calculateState()
 
   if (debounceState() && (state != STATE))
   {
+    // update the STATE everytime we finished debouncing and the state calculated is different than previous
+    // but send the event only when hall state transitioned from HIGH/LOW to LOW/HIGH
     if ((state & 1) != (STATE & 1))
     {
-      shallSendEvent = true;
+      if (wasReady)
+      {
+        shallSendEvent = true;
+      }
     }
     STATE = state;
   }
@@ -173,12 +190,24 @@ boolean isOpenLoad()
   return isOpenLoad;
 }
 
+boolean isShortToGround()
+{
+  boolean isShortToGround = false;
+
+  if (IN.filteredLsb < PARAM_SHORT_TO_GND_TH)
+  {
+    isShortToGround = true;
+  }
+
+  return isShortToGround;
+}
+
 void taskA()
 {
   static uint8 eventsCounter;
   uint32 currentMillis = millis();
   boolean stateChanged = false;
-  if (currentMillis - previousMillis >= task10ms)
+  if (currentMillis - previousMillis >= taskTime)
   {
     // It's time to execute the 1 ms task
     previousMillis = currentMillis;
@@ -186,7 +215,7 @@ void taskA()
     readInput();
     filterInput();
 
-    if (!isOpenLoad())
+    if (!isOpenLoad() && !isShortToGround())
     {
       stateChanged = calculateState();
     }
