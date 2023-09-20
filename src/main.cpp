@@ -33,7 +33,7 @@ Sensor sensor = {
 #define PARAM_MIN_HYST_THRESHOLD 300u
 #define PARAM_MAX_HYST_THRESHOLD 400u
 #define PARAM_OPEN_LOAD_TH 600u
-#define PARAM_DEBOUNCE_THRESHOLD 10u // [ms]
+#define PARAM_DEBOUNCE_THRESHOLD 300u // [ms]
 #define PARAM_SHORT_TO_GND_TH 100u
 
 uint32 previousMillis = 0u;
@@ -124,7 +124,7 @@ boolean calculateState()
     // nothing
   }
 
-  if (debounceState() && (state != STATE))
+  if (debounceState())
   {
     // update the STATE everytime we finished debouncing and the state calculated is different than previous
     // but send the event only when hall state transitioned from HIGH/LOW to LOW/HIGH
