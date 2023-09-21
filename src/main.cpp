@@ -7,24 +7,38 @@ typedef struct
   uint16 filteredLsb;
 } Input;
 
+typedef enum
+{
+  DEBOUNCE_FINISHED = 0,
+  DEBOUNCE_STARTED,
+} Debounce_State;
+
+typedef struct
+{
+  Debounce_State state;
+  uint16 debounceCounter;
+} Debounce;
+
 typedef struct
 {
   uint8 state;
   Input input;
-  uint16 debounceCounter;
-  boolean debounceStarted;
+  Debounce debounce;
 } Sensor;
 
 // global data
 Sensor sensor = {
     .state = 0u,
     .input = {0},
-    .debounceCounter = 0u,
-    .debounceStarted = false};
+    .debounce = {
+        .state = DEBOUNCE_FINISHED,
+        .debounceCounter = 0u,
+    }};
 
 #define self sensor
 #define IN self.input
 #define STATE self.state
+#define DEBOUNCE self.debounce
 
 #define HALL_ACTIVE 1u
 #define HALL_READY 2u
@@ -35,6 +49,13 @@ Sensor sensor = {
 #define PARAM_OPEN_LOAD_TH 600u
 #define PARAM_DEBOUNCE_THRESHOLD 300u // [ms]
 #define PARAM_SHORT_TO_GND_TH 100u
+
+// state transitioned from 0 to 1 or 1 to 0 and the READY bit was set
+#define canSendEvent(state) (((state & HALL_ACTIVE) != (STATE & HALL_ACTIVE)) && (STATE & HALL_READY))
+
+// state = 0 1
+// STATE = 0 1
+//
 
 uint32 previousMillis = 0u;
 const uint8 taskTime = 1u; // [ms]
@@ -47,7 +68,7 @@ void taskA();
 boolean calculateState();
 boolean isOpenLoad();
 boolean isShortToGround();
-boolean debounceState();
+Debounce_State debounceState();
 
 void setup()
 {
@@ -66,8 +87,8 @@ void hallInit()
 {
   readInput();
   IN.filteredLsb = IN.lsb;
-  self.debounceCounter = 0u;
-  self.debounceStarted = false;
+  DEBOUNCE.debounceCounter = 0u;
+  DEBOUNCE.state = DEBOUNCE_FINISHED;
   // delay(5000);
 }
 
@@ -89,7 +110,7 @@ void graph()
   Serial.print(",");
   Serial.print(IN.filteredLsb);
   Serial.print(",");
-  Serial.print(self.debounceCounter);
+  Serial.print(DEBOUNCE.debounceCounter);
   Serial.print(",");
   Serial.println(STATE);
 }
@@ -102,80 +123,65 @@ boolean calculateState()
   state &= ~(HALL_EXT_ERR);
   state |= HALL_READY;
 
-  boolean wasReady = (boolean)(STATE & HALL_READY);
+  // boolean wasReady = ;
   boolean wasActive = (boolean)(state & HALL_ACTIVE);
 
   if (wasActive && IN.lsb < PARAM_MIN_HYST_THRESHOLD)
   {
     state &= (~HALL_ACTIVE);
-    self.debounceStarted = true;
+    DEBOUNCE.state = DEBOUNCE_STARTED;
     // reset debounce counter
-    // self.debounceCounter = PARAM_DEBOUNCE_THRESHOLD;
+    // DEBOUNCE.debounceCounter = PARAM_DEBOUNCE_THRESHOLD;
   }
   else if (!wasActive && IN.lsb > PARAM_MAX_HYST_THRESHOLD)
   {
     state |= HALL_ACTIVE;
-    self.debounceStarted = true;
+    DEBOUNCE.state = DEBOUNCE_STARTED;
     // reset debounce counter
-    // self.debounceCounter = PARAM_DEBOUNCE_THRESHOLD;
+    // DEBOUNCE.debounceCounter = PARAM_DEBOUNCE_THRESHOLD;
   }
   else
   {
     // nothing
   }
 
-  if (debounceState())
+  if (debounceState() == DEBOUNCE_FINISHED)
   {
     // update the STATE everytime we finished debouncing and the state calculated is different than previous
     // but send the event only when hall state transitioned from HIGH/LOW to LOW/HIGH
-    if ((state & 1) != (STATE & 1))
+    if (canSendEvent(state))
     {
-      if (wasReady)
-      {
-        shallSendEvent = true;
-      }
+      shallSendEvent = true;
     }
+
     STATE = state;
   }
 
   return shallSendEvent;
 }
 
-boolean debounceState()
+Debounce_State debounceState()
 {
 
-  if (self.debounceStarted)
+  Debounce_State ret = DEBOUNCE_STARTED;
+
+  if (DEBOUNCE.state == DEBOUNCE_STARTED)
   {
     // continue debouncing
-    if (self.debounceCounter > 0u)
+    if (DEBOUNCE.debounceCounter > 0u)
     {
-      self.debounceCounter--;
+      DEBOUNCE.debounceCounter--;
     }
   }
 
-  if (self.debounceCounter == 0u)
+  if (DEBOUNCE.debounceCounter == 0u)
   {
-    self.debounceCounter = PARAM_DEBOUNCE_THRESHOLD;
-    self.debounceStarted = false;
-    return true;
+    DEBOUNCE.debounceCounter = PARAM_DEBOUNCE_THRESHOLD;
+    DEBOUNCE.state = DEBOUNCE_FINISHED;
+    ret = DEBOUNCE_FINISHED;
   }
-  return false;
 
-  /*
-    boolean debounceFinished = false;
-    if (self.debounceCounter > 0u)
-    {
-      self.debounceCounter--;
-    }
-
-    if (self.debounceCounter == 0u)
-    {
-      // self.debounceCounter = PARAM_DEBOUNCE_THRESHOLD;
-      // self.debounceStarted = false;
-      debounceFinished = true;
-    }
-    return debounceFinished;
-  */
+  return ret;
 }
 
 boolean isOpenLoad()
@@ -222,9 +228,9 @@ void taskA()
     else
     {
       STATE |= HALL_EXT_ERR;
-      // self.debounceStarted = false;
+      // DEBOUNCE.state = DEBOUNCE_FINISHED;
       // dont need to debounce when we get out of EXT_ERR
-      self.debounceCounter = 0u;
+      DEBOUNCE.debounceCounter = 0u;
     }
 
     if (stateChanged)
