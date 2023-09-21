@@ -163,8 +163,6 @@ boolean calculateState()
 Debounce_State debounceState()
 {
 
-  Debounce_State ret = DEBOUNCE_STARTED;
-
   if (DEBOUNCE.state == DEBOUNCE_STARTED)
   {
     // continue debouncing
@@ -178,10 +176,9 @@ Debounce_State debounceState()
   {
     DEBOUNCE.debounceCounter = PARAM_DEBOUNCE_THRESHOLD;
     DEBOUNCE.state = DEBOUNCE_FINISHED;
-    ret = DEBOUNCE_FINISHED;
   }
 
-  return ret;
+  return DEBOUNCE.state;
 }
 
 boolean isOpenLoad()
