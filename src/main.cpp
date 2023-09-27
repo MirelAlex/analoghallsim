@@ -11,12 +11,14 @@ typedef enum
 {
   DEBOUNCE_FINISHED = 0,
   DEBOUNCE_STARTED,
+  DEBOUNCE_IN_TRANS
 } Debounce_State;
 
 typedef struct
 {
   Debounce_State state;
-  uint16 debounceCounter;
+  uint16 debounceCounterDown;
+  uint16 debounceCounterUp;
 } Debounce;
 
 typedef struct
@@ -32,7 +34,8 @@ Sensor sensor = {
     .input = {0},
     .debounce = {
         .state = DEBOUNCE_FINISHED,
-        .debounceCounter = 0u,
+        .debounceCounterDown = 0u,
+        .debounceCounterUp = 0u,
     }};
 
 #define self sensor
@@ -47,20 +50,19 @@ Sensor sensor = {
 #define PARAM_MIN_HYST_THRESHOLD 300u
 #define PARAM_MAX_HYST_THRESHOLD 400u
 #define PARAM_OPEN_LOAD_TH 600u
-#define PARAM_DEBOUNCE_THRESHOLD 300u // [ms]
+#define PARAM_DEBOUNCE_THRESHOLD 100u // [ms]
 #define PARAM_SHORT_TO_GND_TH 100u
+#define PARAM_STATE_INVERTED 1u
 
 // state transitioned from 0 to 1 or 1 to 0 and the READY bit was set
-#define canSendEvent(state) (((state & HALL_ACTIVE) != (STATE & HALL_ACTIVE)) && (STATE & HALL_READY))
-
-// state = 0 1
-// STATE = 0 1
-//
-
+#define canSendEvent(state) (((state & HALL_ACTIVE) != (STATE & HALL_ACTIVE)))
+#define resetDebounceCounters()    DEBOUNCE.debounceCounterUp = PARAM_DEBOUNCE_THRESHOLD; \
+                                   DEBOUNCE.debounceCounterDown = PARAM_DEBOUNCE_THRESHOLD
 uint32 previousMillis = 0u;
-const uint8 taskTime = 1u; // [ms]
+const uint8 taskTime = 10u; // [ms]
 // function prototypes
 void hallInit();
+void setInitialState();
 void readInput(void);
 void filterInput(void);
 void graph(void);
@@ -69,6 +71,7 @@ boolean calculateState();
 boolean isOpenLoad();
 boolean isShortToGround();
 Debounce_State debounceState();
+boolean debounceStateFinished(uint16 *debounceCounter);
 
 void setup()
 {
@@ -87,8 +90,9 @@ void hallInit()
 {
   readInput();
   IN.filteredLsb = IN.lsb;
-  DEBOUNCE.debounceCounter = 0u;
-  DEBOUNCE.state = DEBOUNCE_FINISHED;
+  setInitialState();
+  resetDebounceCounters();
+  // DEBOUNCE.state = DEBOUNCE_FINISHED;
   // delay(5000);
 }
 
@@ -108,76 +112,102 @@ void graph()
 {
   Serial.print(IN.lsb);
   Serial.print(",");
-  Serial.print(IN.filteredLsb);
+  // Serial.print(IN.filteredLsb);
+  // Serial.print(",");
+  Serial.print(DEBOUNCE.debounceCounterDown);
   Serial.print(",");
-  Serial.print(DEBOUNCE.debounceCounter);
+  Serial.print(DEBOUNCE.debounceCounterUp);
   Serial.print(",");
   Serial.println(STATE);
 }
 
 boolean calculateState()
 {
-  boolean shallSendEvent = false;
+  boolean allowedToSendEvent = false;
 
   uint8 state = STATE;
   state &= ~(HALL_EXT_ERR);
   state |= HALL_READY;
 
-  // boolean wasReady = ;
   boolean wasActive = (boolean)(state & HALL_ACTIVE);
+  if (PARAM_STATE_INVERTED) wasActive ^= HALL_ACTIVE;
 
   if (wasActive && IN.lsb < PARAM_MIN_HYST_THRESHOLD)
   {
-    state &= (~HALL_ACTIVE);
-    DEBOUNCE.state = DEBOUNCE_STARTED;
-    // reset debounce counter
-    // DEBOUNCE.debounceCounter = PARAM_DEBOUNCE_THRESHOLD;
+    if (debounceStateFinished(&DEBOUNCE.debounceCounterDown))
+    {
+      state &= ~HALL_ACTIVE;
+      if (PARAM_STATE_INVERTED) state ^= HALL_ACTIVE;
+    }
   }
   else if (!wasActive && IN.lsb > PARAM_MAX_HYST_THRESHOLD)
   {
-    state |= HALL_ACTIVE;
-    DEBOUNCE.state = DEBOUNCE_STARTED;
-    // reset debounce counter
-    // DEBOUNCE.debounceCounter = PARAM_DEBOUNCE_THRESHOLD;
+    if (debounceStateFinished(&DEBOUNCE.debounceCounterUp))
+    {
+      state |= HALL_ACTIVE;
+      if (PARAM_STATE_INVERTED) state ^= HALL_ACTIVE;
+    }
   }
   else
   {
     // nothing
+    resetDebounceCounters();
   }
 
-  if (debounceState() == DEBOUNCE_FINISHED)
+
+
+  if (state != STATE)
   {
     // update the STATE everytime we finished debouncing and the state calculated is different than previous
     // but send the event only when hall state transitioned from HIGH/LOW to LOW/HIGH
     if (canSendEvent(state))
     {
-      shallSendEvent = true;
+      allowedToSendEvent = true;
     }
 
     STATE = state;
+
   }
 
-  return shallSendEvent;
+  return allowedToSendEvent;
+}
+
+void setInitialState()
+{
+  uint8 state = 0u;
+  if (IN.lsb < PARAM_MIN_HYST_THRESHOLD)
+  {
+    // STATE = HALL_READY; // HALL_INACTIVE
+  }
+  else if (IN.lsb > PARAM_MAX_HYST_THRESHOLD)
+  {
+    state = HALL_ACTIVE;
+  }
+  else
+  {
+    // STATE = HALL_READY; // HALL_INACTIVE
+  }
+
+  if (PARAM_STATE_INVERTED) state ^= HALL_ACTIVE;
+  STATE = state;
+}
+
+boolean debounceStateFinished(uint16 *debounceCounter)
+{
+  boolean finished = false;
+  if (*debounceCounter > 0u)
+  {
+    (*debounceCounter)--;
+  }
+  else
+  {
+    finished = true;
+  }
+  return finished;
 }
 
 Debounce_State debounceState()
 {
-
-  if (DEBOUNCE.state == DEBOUNCE_STARTED)
-  {
-    // continue debouncing
-    if (DEBOUNCE.debounceCounter > 0u)
-    {
-      DEBOUNCE.debounceCounter--;
-    }
-  }
-
-  if (DEBOUNCE.debounceCounter == 0u)
-  {
-    DEBOUNCE.debounceCounter = PARAM_DEBOUNCE_THRESHOLD;
-    DEBOUNCE.state = DEBOUNCE_FINISHED;
-  }
-
   return DEBOUNCE.state;
 }
 
@@ -227,7 +257,7 @@ void taskA()
       STATE |= HALL_EXT_ERR;
       // DEBOUNCE.state = DEBOUNCE_FINISHED;
       // dont need to debounce when we get out of EXT_ERR
-      DEBOUNCE.debounceCounter = 0u;
+      resetDebounceCounters();
     }
 
     if (stateChanged)
